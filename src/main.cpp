@@ -6,6 +6,7 @@
 #include <mmsystem.h>
 #include <shlobj.h>
 #include <commdlg.h>
+#include <dwmapi.h>
 #include <string>
 #include <ctime>
 #include "../engine/athan_times.h"
@@ -13,6 +14,7 @@
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "comdlg32.lib")
+#pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "uuid.lib")
 #pragma comment(lib, "user32.lib")
@@ -30,7 +32,7 @@ static int  g_cityIdx = 0;
 static char g_method[24] = "Egypt";
 static int  g_asr = 1;
 static int  g_globalTune = 0;   // ترحيل عام بيتضاف لكل الصلوات (فرق المدينة القريبة)
-struct PrayCfg { bool on; wchar_t sound[160]; int vol; int tune; };
+struct PrayCfg { bool on; wchar_t sound[160]; int vol; int tune; int dur; };  // dur=0 يعني الأذان كامل
 static PrayCfg g_pc[athan::COUNT];   // خانة الشروق متسابة فاضية
 
 // فرق التوقيت من ساعة الويندوز نفسها (بيراعي الصيفي تلقائيًا) —
@@ -52,11 +54,19 @@ static int g_firedMin = -1;            // آخر دقيقة اتأذّن فيه�
 static bool g_playing = false;
 static int  g_playIdx = -1;            // مين اللي شغّال دلوقتي: رقم الصلاة، أو -2 لزرار التجربة
 static bool g_preview = false;         // الصوت الشغّال تجربة من الإعدادات (مش أذان حقيقي)
+static time_t g_stopAt = 0;    // وقت الإيقاف التلقائي (مدة التشغيل) — 0 يعني كامل
 static bool g_autoShown = false;       // النافذة ظهرت لوحدها وقت الأذان → تتخفي لوحدها لما يخلص
 static NOTIFYICONDATAW g_nid = {};
-static HFONT g_fBig, g_fMid, g_fSmall, g_fLink;
+static HFONT g_fBig, g_fMid, g_fSmall, g_fLink, g_fClock;
 static RECT g_rSite = {}, g_rGit = {};    // مناطق الضغط على اللينكات
 static HWND g_hwnd = nullptr;
+
+// شريط العنوان الغامق (ويندوز 10 1809+) — يطابق ثيم البرنامج
+static void darkTitleBar(HWND h) {
+    BOOL on = TRUE;
+    if (FAILED(DwmSetWindowAttribute(h, 20, &on, sizeof(on))))
+        DwmSetWindowAttribute(h, 19, &on, sizeof(on));
+}
 
 static void openUrl(const wchar_t* u) {
     ShellExecuteW(nullptr, L"open", u, nullptr, nullptr, SW_SHOWNORMAL);
@@ -201,6 +211,7 @@ static void loadSettings2() {
         swprintf(nm, 32, L"pr%d_on", i);   g_pc[i].on = regGet(nm, 1) != 0;
         swprintf(nm, 32, L"pr%d_vol", i);  g_pc[i].vol = (int)regGet(nm, 90);
         swprintf(nm, 32, L"pr%d_tune", i); g_pc[i].tune = (int)regGet(nm, 60) - 60;
+        swprintf(nm, 32, L"pr%d_dur", i);  g_pc[i].dur = (int)regGet(nm, 0);
         swprintf(nm, 32, L"pr%d_snd", i);
         std::wstring sn = regGetStr(nm, L"makkah-adhan.mp3");
         wcscpy_s(g_pc[i].sound, sn.c_str());
@@ -219,6 +230,7 @@ static void saveSettings2() {
         swprintf(nm, 32, L"pr%d_on", i);   regSet(nm, g_pc[i].on);
         swprintf(nm, 32, L"pr%d_vol", i);  regSet(nm, g_pc[i].vol);
         swprintf(nm, 32, L"pr%d_tune", i); regSet(nm, g_pc[i].tune + 60);
+        swprintf(nm, 32, L"pr%d_dur", i);  regSet(nm, g_pc[i].dur);
         swprintf(nm, 32, L"pr%d_snd", i);  regSetStr(nm, g_pc[i].sound);
     }
 }
@@ -246,21 +258,167 @@ static void balloon(const wchar_t* title, const wchar_t* text) {
     g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
 }
 
+static HWND g_hAbout = nullptr;
+static RECT g_aSite = {}, g_aMail = {};
+static const int ABT_CLOSE = 500;
+
+static LRESULT CALLBACK aboutProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    switch (m) {
+    case WM_CREATE:
+        CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                      176, 284, 148, 34, h, (HMENU)(INT_PTR)ABT_CLOSE, nullptr, nullptr);
+        return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_DRAWITEM: {
+        const DRAWITEMSTRUCT* di = (const DRAWITEMSTRUCT*)l;
+        HBRUSH wb = CreateSolidBrush(RGB(11, 17, 28));
+        FillRect(di->hDC, &di->rcItem, wb);
+        DeleteObject(wb);
+        bool down = (di->itemState & ODS_SELECTED) != 0;
+        HBRUSH b = CreateSolidBrush(down ? RGB(35, 52, 80) : RGB(30, 44, 68));
+        HPEN pn = CreatePen(PS_SOLID, 1, RGB(80, 104, 140));
+        HGDIOBJ ob = SelectObject(di->hDC, b), op = SelectObject(di->hDC, pn);
+        RoundRect(di->hDC, di->rcItem.left, di->rcItem.top, di->rcItem.right, di->rcItem.bottom, 10, 10);
+        SelectObject(di->hDC, ob); SelectObject(di->hDC, op);
+        DeleteObject(b); DeleteObject(pn);
+        SetBkMode(di->hDC, TRANSPARENT);
+        SetTextColor(di->hDC, RGB(200, 217, 240));
+        SelectObject(di->hDC, g_fMid);
+        RECT r = di->rcItem;
+        DrawTextW(di->hDC, g_ar ? L"\u0625\u063a\u0644\u0627\u0642" : L"Close", -1, &r,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        return TRUE;
+    }
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc0 = BeginPaint(h, &ps);
+        RECT rc;
+        GetClientRect(h, &rc);
+        HDC dc = CreateCompatibleDC(dc0);
+        HBITMAP bmp = CreateCompatibleBitmap(dc0, rc.right, rc.bottom);
+        HGDIOBJ obmp = SelectObject(dc, bmp);
+        HBRUSH bg = CreateSolidBrush(RGB(11, 17, 28));
+        FillRect(dc, &rc, bg);
+        DeleteObject(bg);
+        SetBkMode(dc, TRANSPARENT);
+
+        // أيقونة البرنامج فوق
+        HICON ic = (HICON)LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1),
+                                     IMAGE_ICON, 48, 48, 0);
+        if (ic) { DrawIconEx(dc, (rc.right - 48) / 2, 18, ic, 48, 48, 0, nullptr, DI_NORMAL); DestroyIcon(ic); }
+
+        SelectObject(dc, g_fBig);
+        SetTextColor(dc, RGB(233, 239, 248));
+        RECT r = {0, 74, rc.right, 106};
+        DrawTextW(dc, L"AdhanBox 0.4", -1, &r, DT_CENTER | DT_NOPREFIX);
+
+        SelectObject(dc, g_fSmall);
+        SetTextColor(dc, RGB(147, 164, 191));
+        r = {24, 110, rc.right - 24, 132};
+        DrawTextW(dc, g_ar ? L"\u0645\u0648\u0627\u0642\u064a\u062a \u0627\u0644\u0635\u0644\u0627\u0629 \u0648\u0627\u0644\u0623\u0630\u0627\u0646 \u2014 \u062d\u0633\u0627\u0628 \u0641\u0644\u0643\u064a \u0645\u062d\u0644\u064a \u0628\u062f\u0648\u0646 \u0625\u0646\u062a\u0631\u0646\u062a"
+                           : L"Prayer times and adhan \u2014 fully offline calculation",
+                  -1, &r, DT_CENTER | DT_NOPREFIX | (g_ar ? DT_RTLREADING : 0));
+        SetTextColor(dc, RGB(95, 224, 160));
+        r = {24, 134, rc.right - 24, 156};
+        DrawTextW(dc, g_ar ? L"\u0627\u0644\u0643\u0648\u062f \u0645\u062c\u0627\u0646\u064a \u0644\u0648\u062c\u0647 \u0627\u0644\u0644\u0647 (\u0631\u062e\u0635\u0629 MIT) \u2014 \u0648\u0646\u0633\u0623\u0644\u0643\u0645 \u0627\u0644\u062f\u0639\u0627\u0621"
+                           : L"Free and open source (MIT) \u2014 please keep us in your du\u2019a",
+                  -1, &r, DT_CENTER | DT_NOPREFIX | (g_ar ? DT_RTLREADING : 0));
+
+        // فاصل
+        HPEN sep = CreatePen(PS_SOLID, 1, RGB(38, 51, 74));
+        HGDIOBJ osp = SelectObject(dc, sep);
+        MoveToEx(dc, 60, 170, nullptr);
+        LineTo(dc, rc.right - 60, 170);
+        SelectObject(dc, osp);
+        DeleteObject(sep);
+
+        // MagicWeb في سطر لوحدها
+        SelectObject(dc, g_fMid);
+        SetTextColor(dc, RGB(233, 239, 248));
+        r = {0, 182, rc.right, 208};
+        DrawTextW(dc, L"MagicWeb", -1, &r, DT_CENTER | DT_NOPREFIX);
+
+        // اللينكات (قابلة للضغط)
+        SelectObject(dc, g_fLink);
+        SetTextColor(dc, RGB(96, 165, 250));
+        SIZE s1, s2;
+        const wchar_t* site = L"magicweb.win";
+        const wchar_t* mail = L"AdhanBox@magicweb.win";
+        GetTextExtentPoint32W(dc, site, (int)wcslen(site), &s1);
+        GetTextExtentPoint32W(dc, mail, (int)wcslen(mail), &s2);
+        int sx = (rc.right - s1.cx) / 2, sy = 212;
+        TextOutW(dc, sx, sy, site, (int)wcslen(site));
+        g_aSite = {sx, sy, sx + s1.cx, sy + s1.cy};
+        int mx = (rc.right - s2.cx) / 2, my = 236;
+        TextOutW(dc, mx, my, mail, (int)wcslen(mail));
+        g_aMail = {mx, my, mx + s2.cx, my + s2.cy};
+
+        // جيت هب — آخر سطر، مجرد نص
+        SelectObject(dc, g_fSmall);
+        SetTextColor(dc, RGB(105, 122, 148));
+        r = {0, 258, rc.right, 278};
+        DrawTextW(dc, L"github.com/elpasha3000/AdhanBox", -1, &r, DT_CENTER | DT_NOPREFIX);
+
+        BitBlt(dc0, 0, 0, rc.right, rc.bottom, dc, 0, 0, SRCCOPY);
+        SelectObject(dc, obmp);
+        DeleteObject(bmp);
+        DeleteDC(dc);
+        EndPaint(h, &ps);
+        return 0;
+    }
+    case WM_LBUTTONUP: {
+        POINT pt = {LOWORD(l), HIWORD(l)};
+        if (PtInRect(&g_aSite, pt)) openUrl(L"https://magicweb.win/?src=adhanbox-about");
+        if (PtInRect(&g_aMail, pt)) openUrl(L"mailto:AdhanBox@magicweb.win");
+        return 0;
+    }
+    case WM_SETCURSOR: {
+        POINT pt;
+        GetCursorPos(&pt);
+        ScreenToClient(h, &pt);
+        if (PtInRect(&g_aSite, pt) || PtInRect(&g_aMail, pt)) {
+            SetCursor(LoadCursor(nullptr, IDC_HAND));
+            return TRUE;
+        }
+        break;
+    }
+    case WM_COMMAND:
+        if (LOWORD(w) == ABT_CLOSE) DestroyWindow(h);
+        return 0;
+    case WM_CLOSE:
+        DestroyWindow(h);
+        return 0;
+    case WM_DESTROY:
+        g_hAbout = nullptr;
+        return 0;
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+
 static void aboutBox(HWND h) {
-    MessageBoxW(h, g_ar
-        ? L"AdhanBox v0.1\n\n"
-          L"مواقيت الصلاة والأذان — حساب فلكي محلي بدون إنترنت.\n"
-          L"الكود مجاني لوجه الله (رخصة MIT).\n\n"
-          L"صنع بواسطة MagicWeb\n"
-          L"magicweb.win · github.com/elpasha3000/AdhanBox\n"
-          L"AdhanBox@magicweb.win"
-        : L"AdhanBox v0.1\n\n"
-          L"Prayer times & adhan — offline astronomical calculation.\n"
-          L"Free & open source, fi sabilillah (MIT license).\n\n"
-          L"Made by MagicWeb\n"
-          L"magicweb.win · github.com/elpasha3000/AdhanBox\n"
-          L"AdhanBox@magicweb.win",
-        g_ar ? L"عن البرنامج" : L"About AdhanBox", MB_OK | MB_ICONINFORMATION);
+    if (g_hAbout) { SetForegroundWindow(g_hAbout); return; }
+    static bool reg = false;
+    if (!reg) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc = aboutProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"AdhanBoxAbout";
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1));
+        RegisterClassW(&wc);
+        reg = true;
+    }
+    RECT pr;
+    GetWindowRect(h, &pr);
+    int wdt = 500, hgt = 336 + GetSystemMetrics(SM_CYCAPTION) + 2 * GetSystemMetrics(SM_CYFIXEDFRAME);
+    g_hAbout = CreateWindowExW(WS_EX_TOOLWINDOW, L"AdhanBoxAbout",
+                               g_ar ? L"\u0639\u0646 \u0627\u0644\u0628\u0631\u0646\u0627\u0645\u062c" : L"About AdhanBox",
+                               WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+                               pr.left + 28, pr.top + 40, wdt, hgt,
+                               h, nullptr, GetModuleHandleW(nullptr), nullptr);
+    darkTitleBar(g_hAbout);
+    ShowWindow(g_hAbout, SW_SHOWNORMAL);
 }
 
 static std::wstring exeDir() {
@@ -353,6 +511,7 @@ static void stopSound() {
     g_playing = false;
     g_playIdx = -1;
     g_preview = false;
+    g_stopAt = 0;
     if (g_hSet) InvalidateRect(g_hSet, nullptr, TRUE);
 }
 
@@ -363,8 +522,10 @@ static bool mciStillPlaying() {
     return wcscmp(st, L"playing") == 0;
 }
 
-static void playFile(const wchar_t* fname, int vol) {
+
+static void playFile(const wchar_t* fname, int vol, int dur = 0) {
     stopSound();
+    g_stopAt = dur > 0 ? time(nullptr) + dur : 0;
     std::wstring path = soundsDir() + L"\\" + ((fname && *fname) ? fname : L"makkah-adhan.mp3");
     std::wstring cmd = L"open \"" + path + L"\" type mpegvideo alias abx";
     if (mciSendStringW(cmd.c_str(), nullptr, 0, nullptr) == 0) {
@@ -377,13 +538,13 @@ static void playFile(const wchar_t* fname, int vol) {
     }
 }
 static void playAdhan() {   // للتجربة العامة — بصوت ودرجة الظهر
-    playFile(g_pc[athan::DHUHR].sound, g_pc[athan::DHUHR].vol);
+    playFile(g_pc[athan::DHUHR].sound, g_pc[athan::DHUHR].vol, g_pc[athan::DHUHR].dur);
     g_playIdx = -2;
 }
 // زرار ▶/■ توجل: نفس الزرار بيشغّل ويوقّف
 static void togglePlay(int i) {
     if (g_playing && g_playIdx == i) { stopSound(); return; }
-    playFile(g_pc[i].sound, g_pc[i].vol);
+    playFile(g_pc[i].sound, g_pc[i].vol, g_pc[i].dur);
     g_playIdx = i;
     g_preview = true;
     if (g_hSet) InvalidateRect(g_hSet, nullptr, TRUE);
@@ -430,8 +591,8 @@ static void tick(HWND hwnd) {
     if (lt.tm_yday != g_day) { recompute(); g_firedMin = -1; }
 
     // الصوت خلص لوحده؟ نصحّح الحالة، ولو الشاشة كانت ظهرت للأذان نخفيها
-    if (g_playing && !mciStillPlaying()) {
-        stopSound();
+    if (g_playing && (!mciStillPlaying() || (g_stopAt && time(nullptr) >= g_stopAt))) {
+        stopSound();               // خلص لوحده أو عدّى مدة التشغيل المحددة
         hideIfAutoShown(hwnd);
     }
 
@@ -452,7 +613,7 @@ static void tick(HWND hwnd) {
         if (pm == nm && g_firedMin != nm) {
             g_firedMin = nm;
             if (g_adhanOn && !muted) {
-                playFile(g_pc[i].sound, g_pc[i].vol);
+                playFile(g_pc[i].sound, g_pc[i].vol, g_pc[i].dur);
                 g_playIdx = i;
                 // تظهر الشاشة وقت الأذان وتفضل لحد ما يخلص وبعدين تتخفي لوحدها
                 if (g_showAtAdhan && !IsWindowVisible(hwnd)) {
@@ -463,7 +624,17 @@ static void tick(HWND hwnd) {
             }
         }
     }
-    InvalidateRect(hwnd, nullptr, TRUE);
+    // كل ثانية: كارت الرأس بس (الساعة والعدّاد) — الشاشة كلها عند تغيّر الدقيقة
+    static int lastMin = -1;
+    if (nm != lastMin) {
+        lastMin = nm;
+        InvalidateRect(hwnd, nullptr, TRUE);
+    } else {
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        RECT hd = {14, 12, rc.right - 14, 150};
+        InvalidateRect(hwnd, &hd, TRUE);
+    }
 }
 
 static void roundCard(HDC dc, RECT r, COLORREF fill, COLORREF border) {
@@ -496,17 +667,29 @@ static void paint(HWND hwnd) {
     wchar_t line[128];
 
     // ── كارت الرأس: عنوان + العدّاد ──
-    RECT hd = {14, 12, rc.right - 14, 118};
+    RECT hd = {14, 12, rc.right - 14, 150};
     roundCard(dc, hd, RGB(19, 32, 52), RGB(38, 51, 74));
     SelectObject(dc, g_fBig);
     SetTextColor(dc, RGB(233, 239, 248));
-    RECT r = {hd.left, 48, hd.right, 80};
+    RECT r = {hd.left, 42, hd.right, 74};
     {
         const athan::City& cc = athan::CITIES[g_cityIdx];
         wchar_t tt[128];
-        swprintf(tt, 128, L"🕌 AdhanBox — %s، %s",
+        swprintf(tt, 128, g_ar ? L"🕌 AdhanBox — %s، %s"
+                              : L"🕌 AdhanBox — %s, %s",
                  g_ar ? cc.cityAr : cc.cityEn, g_ar ? cc.countryAr : cc.countryEn);
-        DrawTextW(dc, tt, -1, &r, DT_CENTER | (g_ar ? DT_RTLREADING : 0));
+        DrawTextW(dc, tt, -1, &r, DT_CENTER | DT_NOPREFIX | (g_ar ? DT_RTLREADING : 0));
+    }
+    {   // ── ساعة حيّة بالثواني تحت اسم البرنامج ──
+        time_t tn = time(nullptr);
+        tm ln;
+        localtime_s(&ln, &tn);
+        wchar_t ck[32];
+        swprintf(ck, 32, L"%02d:%02d:%02d", ln.tm_hour, ln.tm_min, ln.tm_sec);
+        SelectObject(dc, g_fClock);
+        SetTextColor(dc, RGB(255, 255, 255));
+        RECT rk = {hd.left, 76, hd.right, 114};
+        DrawTextW(dc, ck, -1, &rk, DT_CENTER);
     }
     SelectObject(dc, g_fMid);
     SetTextColor(dc, RGB(95, 224, 160));
@@ -516,14 +699,34 @@ static void paint(HWND hwnd) {
                  g_ar ? L"⏳ %s %s — باقي %d:%02d ساعة" : L"⏳ %s %s — in %d:%02d",
                  pname(nxt), fmtMin(prayMin(nxt)).c_str(), left / 60, left % 60);
     } else {
-        swprintf(line, 128, L"%s", S_DONE.get());
+        // خلصت صلوات النهارده → عدّاد لفجر بكره (عبر منتصف الليل)
+        time_t t2 = time(nullptr) + 24 * 3600;
+        tm l2;
+        localtime_s(&l2, &t2);
+        athan::Times tt2 = g_pt.compute(l2.tm_year + 1900, l2.tm_mon + 1, l2.tm_mday);
+        int fm = tt2.minuteOfDay(athan::FAJR);
+        if (fm >= 0) {
+            fm = ((fm + g_globalTune + g_pc[athan::FAJR].tune) % 1440 + 1440) % 1440;
+            int left = fm + 1440 - nm;
+            swprintf(line, 128,
+                     g_ar ? L"⏳ الفجر بكره %s — باقي %d:%02d ساعة"
+                          : L"⏳ Fajr tomorrow %s — in %d:%02d",
+                     fmtMin(fm).c_str(), left / 60, left % 60);
+        } else {
+            swprintf(line, 128, L"%s", S_DONE.get());
+        }
     }
-    r = {hd.left, 82, hd.right, 112};
-    DrawTextW(dc, line, -1, &r, DT_CENTER | (g_ar ? DT_RTLREADING : 0));
+    r = {hd.left, 114, hd.right, 144};
+    {   // السطر الطويل (زي «خلصت صلوات النهارده») يتصغّر بدل ما يتقص
+        SIZE ls;
+        GetTextExtentPoint32W(dc, line, (int)wcslen(line), &ls);
+        if (ls.cx > hd.right - hd.left - 16) SelectObject(dc, g_fSmall);
+    }
+    DrawTextW(dc, line, -1, &r, DT_CENTER | DT_NOPREFIX | (g_ar ? DT_RTLREADING : 0));
 
     // ── كروت المواقيت: شبكة 3×2 ──
     int cw = (rc.right - 28 - 2 * 10) / 3, ch = 66;
-    int x0 = 14, y0 = 130;
+    int x0 = 14, y0 = 162;
     for (int i = 0; i < athan::COUNT; i++) {
         // ترتيب من اليمين لليسار: الفجر أول كارت يمين
         int col = g_ar ? 2 - (i % 3) : (i % 3), row = i / 3;
@@ -547,7 +750,7 @@ static void paint(HWND hwnd) {
 
     // ── حالة التشغيل ──
     SelectObject(dc, g_fSmall);
-    r = {0, 286, rc.right, 308};
+    r = {0, 318, rc.right, 340};
     {
         bool muted = (g_muteUntil > time(nullptr));
         const wchar_t* st = g_playing ? S_PLAYING.get()
@@ -556,7 +759,7 @@ static void paint(HWND hwnd) {
                      : S_IDLE.get()));
         SetTextColor(dc, g_playing ? RGB(240, 169, 46)
                                    : ((!g_adhanOn || muted) ? RGB(240, 169, 46) : RGB(91, 107, 134)));
-        DrawTextW(dc, st, -1, &r, DT_CENTER | (g_ar ? DT_RTLREADING : 0));
+        DrawTextW(dc, st, -1, &r, DT_CENTER | DT_NOPREFIX | (g_ar ? DT_RTLREADING : 0));
     }
 
     // ── اللينكات ──
@@ -637,8 +840,12 @@ static SetRow g_rows[] = {
     {&g_showAtAdhan, L"إظهار الشاشة وقت الأذان وإخفاؤها بعده", L"Show window during adhan, hide after"},
 };
 enum { CB_COUNTRY = 340, CB_CITY, CB_METHOD, CB_ASR, ED_GTUNE,
+       BT_GMINUS = 345, BT_GPLUS, BT_GAPPLY,
        BT_FOLDER = 350, BT_ADDSND, BT_CLOSE,
-       CB_SND0 = 360, ED_VOL0 = 370, ED_TUNE0 = 380, BT_PLAY0 = 390 };
+       CB_SND0 = 360, ED_VOL0 = 370, ED_TUNE0 = 380, BT_PLAY0 = 390,
+       BT_VMINUS0 = 400, BT_VPLUS0 = 410, CB_DUR0 = 420 };
+static const int DURS[] = {0, 15, 30, 45, 60, 90, 120, 180, 300};
+static const int DURN = (int)(sizeof(DURS) / sizeof(DURS[0]));
 static HBRUSH g_hbDark = nullptr;
 static const int PROW_Y0 = 250, PROW_H = 44, GROW_Y0 = 478, GROW_H = 42, GROW_N = 4;
 static const int BTNROW_Y = GROW_Y0 + GROW_N * GROW_H + 8;   // صف زراير مجلد الأصوات
@@ -724,6 +931,17 @@ static void fillCombos(HWND h) {
             if (snd[j] == g_pc[i].sound) ssel = j;
         }
         SendMessageW(sc, CB_SETCURSEL, ssel, 0);
+        HWND dcb = GetDlgItem(h, (int)(CB_DUR0 + i));
+        SendMessageW(dcb, CB_RESETCONTENT, 0, 0);
+        int dsel = 0;
+        for (int j = 0; j < DURN; j++) {
+            wchar_t db[32];
+            if (DURS[j] == 0) wcscpy_s(db, g_ar ? L"كامل" : L"Full");
+            else swprintf(db, 32, g_ar ? L"%d ثانية" : L"%d sec", DURS[j]);
+            SendMessageW(dcb, CB_ADDSTRING, 0, (LPARAM)db);
+            if (DURS[j] == g_pc[i].dur) dsel = j;
+        }
+        SendMessageW(dcb, CB_SETCURSEL, dsel, 0);
         wchar_t b[16];
         swprintf(b, 16, L"%d", g_pc[i].vol);
         SetWindowTextW(GetDlgItem(h, (int)(ED_VOL0 + i)), b);
@@ -764,6 +982,8 @@ static void applyFromControls(HWND h) {
         GetWindowTextW(GetDlgItem(h, (int)(ED_TUNE0 + i)), b, 16);
         v = _wtoi(b);
         g_pc[i].tune = v < -60 ? -60 : (v > 60 ? 60 : v);
+        int di = (int)SendMessageW(GetDlgItem(h, (int)(CB_DUR0 + i)), CB_GETCURSEL, 0, 0);
+        if (di >= 0 && di < DURN) g_pc[i].dur = DURS[di];
     }
     saveSettings2();
     saveSettings();
@@ -776,28 +996,39 @@ static LRESULT CALLBACK setProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_CREATE: {
         if (!g_hbDark) g_hbDark = CreateSolidBrush(RGB(15, 23, 37));
         DWORD cbs = WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL;
-        CreateWindowW(L"COMBOBOX", nullptr, cbs, 244, 76, 200, 320, h, (HMENU)CB_COUNTRY, nullptr, nullptr);
-        CreateWindowW(L"COMBOBOX", nullptr, cbs, 24, 76, 200, 360, h, (HMENU)CB_CITY, nullptr, nullptr);
-        CreateWindowW(L"COMBOBOX", nullptr, cbs, 152, 132, 292, 380, h, (HMENU)CB_METHOD, nullptr, nullptr);
-        CreateWindowW(L"COMBOBOX", nullptr, cbs, 24, 132, 118, 120, h, (HMENU)CB_ASR, nullptr, nullptr);
+        CreateWindowW(L"COMBOBOX", nullptr, cbs, 308, 76, 264, 320, h, (HMENU)CB_COUNTRY, nullptr, nullptr);
+        CreateWindowW(L"COMBOBOX", nullptr, cbs, 24, 76, 264, 360, h, (HMENU)CB_CITY, nullptr, nullptr);
+        CreateWindowW(L"COMBOBOX", nullptr, cbs, 192, 132, 380, 380, h, (HMENU)CB_METHOD, nullptr, nullptr);
+        CreateWindowW(L"COMBOBOX", nullptr, cbs, 24, 132, 158, 120, h, (HMENU)CB_ASR, nullptr, nullptr);
+        CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                      24, 190, 26, 26, h, (HMENU)BT_GMINUS, nullptr, nullptr);
         CreateWindowW(L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | ES_CENTER | WS_BORDER,
-                      24, 190, 118, 26, h, (HMENU)ED_GTUNE, nullptr, nullptr);
+                      54, 190, 74, 26, h, (HMENU)ED_GTUNE, nullptr, nullptr);
+        CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                      132, 190, 26, 26, h, (HMENU)BT_GPLUS, nullptr, nullptr);
+        CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                      164, 190, 94, 26, h, (HMENU)BT_GAPPLY, nullptr, nullptr);
         for (int x = 0; x < 5; x++) {
             int i = PRAYS[x], y = PROW_Y0 + x * PROW_H;
-            CreateWindowW(L"COMBOBOX", nullptr, cbs, 160, y + 6, 158, 300, h, (HMENU)(INT_PTR)(CB_SND0 + i), nullptr, nullptr);
+            CreateWindowW(L"COMBOBOX", nullptr, cbs, 288, y + 6, 164, 300, h, (HMENU)(INT_PTR)(CB_SND0 + i), nullptr, nullptr);
+            CreateWindowW(L"COMBOBOX", nullptr, cbs, 192, y + 6, 90, 260, h, (HMENU)(INT_PTR)(CB_DUR0 + i), nullptr, nullptr);
+            CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                          164, y + 7, 22, 24, h, (HMENU)(INT_PTR)(BT_VPLUS0 + i), nullptr, nullptr);
             CreateWindowW(L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | ES_NUMBER | ES_CENTER | WS_BORDER,
-                          110, y + 7, 42, 24, h, (HMENU)(INT_PTR)(ED_VOL0 + i), nullptr, nullptr);
+                          124, y + 7, 38, 24, h, (HMENU)(INT_PTR)(ED_VOL0 + i), nullptr, nullptr);
+            CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                          100, y + 7, 22, 24, h, (HMENU)(INT_PTR)(BT_VMINUS0 + i), nullptr, nullptr);
             CreateWindowW(L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | ES_CENTER | WS_BORDER,
-                          62, y + 7, 42, 24, h, (HMENU)(INT_PTR)(ED_TUNE0 + i), nullptr, nullptr);
+                          56, y + 7, 38, 24, h, (HMENU)(INT_PTR)(ED_TUNE0 + i), nullptr, nullptr);
             CreateWindowW(L"BUTTON", L"\u25B6", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                          24, y + 6, 30, 26, h, (HMENU)(INT_PTR)(BT_PLAY0 + i), nullptr, nullptr);
+                          24, y + 6, 28, 26, h, (HMENU)(INT_PTR)(BT_PLAY0 + i), nullptr, nullptr);
         }
         CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                      24, BTNROW_Y, 206, 34, h, (HMENU)BT_FOLDER, nullptr, nullptr);
+                      24, BTNROW_Y, 266, 34, h, (HMENU)BT_FOLDER, nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                      238, BTNROW_Y, 206, 34, h, (HMENU)BT_ADDSND, nullptr, nullptr);
+                      302, BTNROW_Y, 266, 34, h, (HMENU)BT_ADDSND, nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                      134, CLOSE_Y, 200, 36, h, (HMENU)BT_CLOSE, nullptr, nullptr);
+                      192, CLOSE_Y, 200, 36, h, (HMENU)BT_CLOSE, nullptr, nullptr);
         fillCombos(h);
         return 0;
     }
@@ -816,8 +1047,27 @@ static LRESULT CALLBACK setProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         DeleteObject(wb);
         bool down = (di->itemState & ODS_SELECTED) != 0;
         int  id = (int)di->CtlID;
-        bool wide = (id == BT_FOLDER || id == BT_ADDSND || id == BT_CLOSE);
+        bool wide = (id == BT_FOLDER || id == BT_ADDSND || id == BT_CLOSE || id == BT_GAPPLY);
         bool closeb = (id == BT_CLOSE);
+        // زراير ناقص/زايد الصغيرة (الصوت والترحيل) — شكل محايد رمادي
+        bool step = (id == BT_GMINUS || id == BT_GPLUS ||
+                     (id >= BT_VMINUS0 && id < BT_VMINUS0 + athan::COUNT) ||
+                     (id >= BT_VPLUS0 && id < BT_VPLUS0 + athan::COUNT));
+        if (step) {
+            bool plus = (id == BT_GPLUS || (id >= BT_VPLUS0 && id < BT_VPLUS0 + athan::COUNT));
+            HBRUSH sb = CreateSolidBrush(down ? RGB(45, 62, 92) : RGB(28, 40, 62));
+            HPEN sp = CreatePen(PS_SOLID, 1, RGB(64, 84, 116));
+            HGDIOBJ o1 = SelectObject(di->hDC, sb), o2 = SelectObject(di->hDC, sp);
+            RoundRect(di->hDC, di->rcItem.left, di->rcItem.top, di->rcItem.right, di->rcItem.bottom, 8, 8);
+            SelectObject(di->hDC, o1); SelectObject(di->hDC, o2);
+            DeleteObject(sb); DeleteObject(sp);
+            SetBkMode(di->hDC, TRANSPARENT);
+            SetTextColor(di->hDC, RGB(190, 210, 236));
+            SelectObject(di->hDC, g_fMid);
+            RECT sr = di->rcItem;
+            DrawTextW(di->hDC, plus ? L"+" : L"−", -1, &sr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            return TRUE;
+        }
         // زرار التجربة توجل: ▶ أخضر وهو واقف، ■ أحمر وهو شغّال
         bool stopMode = (!wide && g_playing && g_playIdx == id - BT_PLAY0);
         COLORREF fill = down ? RGB(35, 52, 80)
@@ -840,7 +1090,9 @@ static LRESULT CALLBACK setProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         SetTextColor(di->hDC, ink);
         SelectObject(di->hDC, closeb ? g_fMid : g_fSmall);
         const wchar_t* cap;
-        if (id == BT_FOLDER)
+        if (id == BT_GAPPLY)
+            cap = g_ar ? L"✔ تطبيق" : L"✔ Apply";
+        else if (id == BT_FOLDER)
             cap = g_ar ? L"\U0001F4C2 فتح مجلد الأصوات"
                        : L"\U0001F4C2 Open sounds folder";
         else if (id == BT_ADDSND)
@@ -872,29 +1124,35 @@ static LRESULT CALLBACK setProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                   DT_CENTER | (g_ar ? DT_RTLREADING : 0));
         SelectObject(dc, g_fSmall);
         SetTextColor(dc, RGB(147, 164, 191));
-        RECT r1 = {244, 56, 444, 74};
+        RECT r1 = {308, 56, 572, 74};
         DrawTextW(dc, g_ar ? L"الدولة" : L"Country", -1, &r1, (g_ar ? DT_RIGHT | DT_RTLREADING : DT_LEFT));
-        RECT r2 = {24, 56, 224, 74};
+        RECT r2 = {24, 56, 288, 74};
         DrawTextW(dc, g_ar ? L"المدينة" : L"City", -1, &r2, (g_ar ? DT_RIGHT | DT_RTLREADING : DT_LEFT));
-        RECT r3 = {152, 112, 444, 130};
+        RECT r3 = {192, 112, 572, 130};
         DrawTextW(dc, g_ar ? L"طريقة الحساب" : L"Calculation method", -1, &r3, (g_ar ? DT_RIGHT | DT_RTLREADING : DT_LEFT));
-        RECT r4 = {24, 112, 142, 130};
+        RECT r4 = {24, 112, 182, 130};
         DrawTextW(dc, g_ar ? L"مذهب العصر" : L"Asr", -1, &r4, (g_ar ? DT_RIGHT | DT_RTLREADING : DT_LEFT));
         // ── الترحيل العام لكل المواقيت ──
-        RECT r5 = {24, 168, 142, 188};
-        DrawTextW(dc, g_ar ? L"ترحيل عام (دقيقة)" : L"Global shift (min)", -1, &r5,
+        RECT r5 = {24, 168, 258, 188};
+        DrawTextW(dc, g_ar ? L"ترحيل عام لكل المواقيت (± دقيقة)"
+                           : L"Global shift for all times (± min)", -1, &r5,
                   (g_ar ? DT_RIGHT | DT_RTLREADING : DT_LEFT));
         SetTextColor(dc, RGB(120, 138, 166));
-        RECT r6 = {152, 166, 444, 214};
-        DrawTextW(dc, g_ar ? L"بيتضاف لكل الصلوات. لو مدينتك بتفرق 5 دقايق عن المدينة المختارة اكتب 5 (أو ناقص 5)"
-                           : L"Added to every prayer. If your town runs 5 min later than the selected city, type 5",
+        RECT r6 = {286, 162, 572, 220};
+        DrawTextW(dc, g_ar ? L"بيتضاف لكل مواقيت الصلاة. غيّر الرقم بزرار الناقص أو الزايد، وبعدين دوس «تطبيق»"
+                           : L"Added to all prayer times. Use the minus or plus button, then press Apply",
                   -1, &r6, DT_WORDBREAK | (g_ar ? DT_RIGHT | DT_RTLREADING : DT_LEFT));
-        RECT hh1 = {160, PROW_Y0 - 20, 318, PROW_Y0 - 2};
-        DrawTextW(dc, g_ar ? L"صوت الأذان" : L"Adhan sound", -1, &hh1, DT_CENTER | (g_ar ? DT_RTLREADING : 0));
-        RECT hh2 = {110, PROW_Y0 - 20, 152, PROW_Y0 - 2};
-        DrawTextW(dc, g_ar ? L"الصوت" : L"Vol", -1, &hh2, DT_CENTER | (g_ar ? DT_RTLREADING : 0));
-        RECT hh3 = {62, PROW_Y0 - 20, 104, PROW_Y0 - 2};
-        DrawTextW(dc, g_ar ? L"\u00B1دقيقة" : L"\u00B1min", -1, &hh3, DT_CENTER);
+        RECT hh0 = {192, PROW_Y0 - 20, 282, PROW_Y0 - 2};
+        DrawTextW(dc, g_ar ? L"مدة التشغيل" : L"Duration", -1, &hh0,
+                  DT_CENTER | (g_ar ? DT_RTLREADING : 0));
+        RECT hh1 = {288, PROW_Y0 - 20, 452, PROW_Y0 - 2};
+        DrawTextW(dc, g_ar ? L"صوت الأذان" : L"Adhan sound", -1, &hh1,
+                  DT_CENTER | (g_ar ? DT_RTLREADING : 0));
+        RECT hh2 = {100, PROW_Y0 - 20, 186, PROW_Y0 - 2};
+        DrawTextW(dc, g_ar ? L"درجة الصوت" : L"Volume", -1, &hh2,
+                  DT_CENTER | (g_ar ? DT_RTLREADING : 0));
+        RECT hh3 = {50, PROW_Y0 - 20, 100, PROW_Y0 - 2};
+        DrawTextW(dc, g_ar ? L"± دقيقة" : L"± min", -1, &hh3, DT_CENTER);
         for (int x = 0; x < 5; x++) {
             int i = PRAYS[x], y = PROW_Y0 + x * PROW_H;
             RECT card = {14, y, rc.right - 14, y + PROW_H - 6};
@@ -958,7 +1216,8 @@ static LRESULT CALLBACK setProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             fillCitiesCombo(h);
             applyFromControls(h);
         } else if ((id == CB_CITY || id == CB_METHOD || id == CB_ASR ||
-                    (id >= CB_SND0 && id < CB_SND0 + athan::COUNT)) && code == CBN_SELCHANGE) {
+                    (id >= CB_SND0 && id < CB_SND0 + athan::COUNT) ||
+                    (id >= CB_DUR0 && id < CB_DUR0 + athan::COUNT)) && code == CBN_SELCHANGE) {
             applyFromControls(h);
         } else if (((id >= ED_VOL0 && id < ED_TUNE0 + athan::COUNT) || id == ED_GTUNE)
                    && code == EN_KILLFOCUS) {
@@ -968,6 +1227,44 @@ static LRESULT CALLBACK setProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             applyFromControls(h);
             togglePlay(id - BT_PLAY0);
             InvalidateRect(h, nullptr, TRUE);
+        } else if (id == BT_GMINUS || id == BT_GPLUS) {
+            applyFromControls(h);
+            g_globalTune += (id == BT_GPLUS) ? 1 : -1;
+            if (g_globalTune < -60) g_globalTune = -60;
+            if (g_globalTune >  60) g_globalTune =  60;
+            saveSettings2(); recompute(); fillCombos(h);
+            if (g_hwnd) InvalidateRect(g_hwnd, nullptr, TRUE);
+        } else if (id == BT_GAPPLY) {
+            // «تطبيق»: الترحيل العام يتوزّع على خانة ±دقيقة بتاعة كل صلاة ويرجع صفر
+            applyFromControls(h);
+            if (g_globalTune != 0) {
+                for (int x = 0; x < 5; x++) {
+                    int i = PRAYS[x];
+                    int t = g_pc[i].tune + g_globalTune;
+                    g_pc[i].tune = t < -60 ? -60 : (t > 60 ? 60 : t);
+                }
+                g_globalTune = 0;
+                saveSettings2(); recompute(); fillCombos(h);
+                InvalidateRect(h, nullptr, TRUE);
+                if (g_hwnd) InvalidateRect(g_hwnd, nullptr, TRUE);
+            }
+        } else if ((id >= BT_VMINUS0 && id < BT_VMINUS0 + athan::COUNT) ||
+                   (id >= BT_VPLUS0 && id < BT_VPLUS0 + athan::COUNT)) {
+            bool plus = (id >= BT_VPLUS0);
+            int i = plus ? id - BT_VPLUS0 : id - BT_VMINUS0;
+            applyFromControls(h);
+            int v = g_pc[i].vol + (plus ? 5 : -5);
+            g_pc[i].vol = v < 0 ? 0 : (v > 100 ? 100 : v);
+            saveSettings2();
+            wchar_t vb[16];
+            swprintf(vb, 16, L"%d", g_pc[i].vol);
+            SetWindowTextW(GetDlgItem(h, (int)(ED_VOL0 + i)), vb);
+            // الصوت شغّال؟ درجة الصوت تتغيّر فورًا وانت سامع
+            if (g_playing && g_playIdx == i) {
+                wchar_t vc[64];
+                swprintf(vc, 64, L"setaudio abx volume to %d", g_pc[i].vol * 10);
+                mciSendStringW(vc, nullptr, 0, nullptr);
+            }
         } else if (id == BT_FOLDER) {
             ShellExecuteW(nullptr, L"open", soundsDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         } else if (id == BT_ADDSND) {
@@ -1015,11 +1312,16 @@ static void openSettings(HWND parent) {
     int top = 40;
     int scr = GetSystemMetrics(SM_CYSCREEN);
     if (top + hgt > scr - 40) top = (scr - hgt) / 2 > 0 ? (scr - hgt) / 2 : 0;
+    int left = pr.left - 110;                       // تفضل جوّه الشاشة مهما كان مكان النافذة الرئيسية
+    int scrW = GetSystemMetrics(SM_CXSCREEN);
+    if (left < 8) left = 8;
+    if (left + 600 > scrW - 8) left = scrW - 608;
     g_hSet = CreateWindowExW(WS_EX_TOOLWINDOW, L"AdhanBoxSet",
                              g_ar ? L"الإعدادات" : L"Settings",
                              WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-                             pr.left - 20, top, 476, hgt,
+                             left, top, 600, hgt,
                              parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+    darkTitleBar(g_hSet);
     ShowWindow(g_hSet, SW_SHOWNORMAL);
 }
 
@@ -1027,16 +1329,16 @@ static LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
     case WM_CREATE: {
         CreateWindowW(L"BUTTON", S_TEST.get(), WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                      252, 316, 158, 38, h, (HMENU)IDB_TEST, nullptr, nullptr);
+                      252, 348, 158, 38, h, (HMENU)IDB_TEST, nullptr, nullptr);
         CreateWindowW(L"BUTTON", S_STOP.get(), WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                      76, 316, 158, 38, h, (HMENU)IDB_STOP, nullptr, nullptr);
+                      76, 348, 158, 38, h, (HMENU)IDB_STOP, nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"EN", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                       18, 18, 44, 26, h, (HMENU)IDB_LANG, nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"ℹ", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                       66, 18, 30, 26, h, (HMENU)IDB_ABOUT, nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"⚙", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                       100, 18, 30, 26, h, (HMENU)IDB_SETTINGS, nullptr, nullptr);
-        SetTimer(h, IDT_TICK, 2000, nullptr);    // فحص كل ثانيتين (خفيف — ومطلوب لرصد نهاية الأذان)
+        SetTimer(h, IDT_TICK, 1000, nullptr);    // كل ثانية — الساعة الحيّة + رصد نهاية الأذان
         return 0;
     }
     case WM_DRAWITEM:
@@ -1132,6 +1434,10 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR, int) {
                            CLEARTYPE_QUALITY, 0, L"Segoe UI");
     g_fSmall = CreateFontW(-14, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
                            CLEARTYPE_QUALITY, 0, L"Segoe UI");
+    g_fClock = CreateFontW(-32, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+                           CLEARTYPE_QUALITY, 0, L"Segoe UI");
+    g_fLink  = CreateFontW(-15, 0, 0, 0, FW_SEMIBOLD, 0, TRUE, 0, DEFAULT_CHARSET, 0, 0,
+                           CLEARTYPE_QUALITY, 0, L"Segoe UI");   // مسطّر — شكل اللينك
 
     WNDCLASSW wc = {};
     wc.lpfnWndProc = wndProc;
@@ -1143,10 +1449,11 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR, int) {
 
     HWND h = CreateWindowExW(WS_EX_APPWINDOW, wc.lpszClassName, APP_NAME,
                              WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-                             CW_USEDEFAULT, CW_USEDEFAULT, 496, 452,
+                             CW_USEDEFAULT, CW_USEDEFAULT, 496, 484,
                              nullptr, nullptr, hi, nullptr);
 
     g_hwnd = h;
+    darkTitleBar(h);
     g_nid.cbSize = sizeof(g_nid);
     g_nid.hWnd = h;
     g_nid.uID = 1;
