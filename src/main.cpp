@@ -5,12 +5,16 @@
 #include <shellapi.h>
 #include <mmsystem.h>
 #include <shlobj.h>
+#include <commdlg.h>
 #include <string>
 #include <ctime>
 #include "../engine/athan_times.h"
 #include "../engine/cities_gen.h"
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "comdlg32.lib")
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "uuid.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -25,6 +29,7 @@ enum { IDT_TICK = 1, IDM_OPEN = 100, IDM_STOPSND, IDM_ABOUT, IDM_EXIT,
 static int  g_cityIdx = 0;
 static char g_method[24] = "Egypt";
 static int  g_asr = 1;
+static int  g_globalTune = 0;   // ترحيل عام بيتضاف لكل الصلوات (فرق المدينة القريبة)
 struct PrayCfg { bool on; wchar_t sound[160]; int vol; int tune; };
 static PrayCfg g_pc[athan::COUNT];   // خانة الشروق متسابة فاضية
 
@@ -45,6 +50,9 @@ static athan::Times g_times;
 static int g_day = -1;                 // يوم-السنة اللي اتحسبت له المواقيت
 static int g_firedMin = -1;            // آخر دقيقة اتأذّن فيها (منع التكرار)
 static bool g_playing = false;
+static int  g_playIdx = -1;            // مين اللي شغّال دلوقتي: رقم الصلاة، أو -2 لزرار التجربة
+static bool g_preview = false;         // الصوت الشغّال تجربة من الإعدادات (مش أذان حقيقي)
+static bool g_autoShown = false;       // النافذة ظهرت لوحدها وقت الأذان → تتخفي لوحدها لما يخلص
 static NOTIFYICONDATAW g_nid = {};
 static HFONT g_fBig, g_fMid, g_fSmall, g_fLink;
 static RECT g_rSite = {}, g_rGit = {};    // مناطق الضغط على اللينكات
@@ -58,6 +66,7 @@ static bool g_ar = true;        // اللغة — محفوظة في الريجس
 static bool g_adhanOn = true;   // الأذان التلقائي
 static bool g_preNotify = true; // تنبيه قبل الأذان بـ10 دقايق
 static bool g_autoStart = false;
+static bool g_showAtAdhan = true; // تظهر الشاشة وقت الأذان وتتخفي لما يخلص
 static time_t g_muteUntil = 0;  // كتم مؤقت
 static int g_notifiedMin = -1;  // منع تكرار التنبيه
 static HWND g_hSet = nullptr;   // نافذة الإعدادات
@@ -127,7 +136,8 @@ static void applyAutoStart() {
     if (g_autoStart) {
         wchar_t exe[MAX_PATH];
         GetModuleFileNameW(nullptr, exe, MAX_PATH);
-        std::wstring v = L"\"" + std::wstring(exe) + L"\"";
+        // /tray = يقوم مصغّر في شريط المهام من غير ما يفتح شاشة
+        std::wstring v = L"\"" + std::wstring(exe) + L"\" /tray";
         RegSetValueExW(k, L"AdhanBox", 0, REG_SZ, (const BYTE*)v.c_str(),
                        (DWORD)((v.size() + 1) * sizeof(wchar_t)));
     } else {
@@ -136,20 +146,22 @@ static void applyAutoStart() {
     RegCloseKey(k);
 }
 static void loadSettings() {
-    g_adhanOn   = regGet(L"adhan_on", 1) != 0;
-    g_preNotify = regGet(L"pre_notify", 1) != 0;
-    g_autoStart = regGet(L"auto_start", 0) != 0;
+    g_adhanOn     = regGet(L"adhan_on", 1) != 0;
+    g_preNotify   = regGet(L"pre_notify", 1) != 0;
+    g_autoStart   = regGet(L"auto_start", 0) != 0;
+    g_showAtAdhan = regGet(L"show_at_adhan", 1) != 0;
 }
 static void saveSettings() {
     regSet(L"adhan_on", g_adhanOn);
     regSet(L"pre_notify", g_preNotify);
     regSet(L"auto_start", g_autoStart);
+    regSet(L"show_at_adhan", g_showAtAdhan);
     applyAutoStart();
 }
 
 static void regSetStr(const wchar_t* name, const std::wstring& v) {
     HKEY k;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\MagicWeb\AdhanBox", 0, nullptr,
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\MagicWeb\\AdhanBox", 0, nullptr,
                         0, KEY_WRITE, nullptr, &k, nullptr) == ERROR_SUCCESS) {
         RegSetValueExW(k, name, 0, REG_SZ, (const BYTE*)v.c_str(),
                        (DWORD)((v.size() + 1) * sizeof(wchar_t)));
@@ -159,7 +171,7 @@ static void regSetStr(const wchar_t* name, const std::wstring& v) {
 static std::wstring regGetStr(const wchar_t* name, const wchar_t* defv) {
     HKEY k; wchar_t buf[256] = L""; DWORD n = sizeof(buf);
     std::wstring out = defv;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\MagicWeb\AdhanBox", 0, KEY_READ, &k) == ERROR_SUCCESS) {
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\MagicWeb\\AdhanBox", 0, KEY_READ, &k) == ERROR_SUCCESS) {
         if (RegQueryValueExW(k, name, nullptr, nullptr, (BYTE*)buf, &n) == ERROR_SUCCESS) out = buf;
         RegCloseKey(k);
     }
@@ -180,6 +192,9 @@ static void loadSettings2() {
     char mb[24] = {}; wcstombs_s(nullptr, mb, m.c_str(), 23);
     strcpy_s(g_method, mb);
     g_asr = (int)regGet(L"asr", 1) == 2 ? 2 : 1;
+    g_globalTune = (int)regGet(L"global_tune", 60) - 60;
+    if (g_globalTune < -120) g_globalTune = -120;
+    if (g_globalTune >  120) g_globalTune =  120;
     for (int x = 0; x < 5; x++) {
         int i = PRAYS[x];
         wchar_t nm[32];
@@ -197,6 +212,7 @@ static void saveSettings2() {
     wchar_t wm[24]; mbstowcs_s(nullptr, wm, g_method, 23);
     regSetStr(L"method", wm);
     regSet(L"asr", g_asr);
+    regSet(L"global_tune", g_globalTune + 60);
     for (int x = 0; x < 5; x++) {
         int i = PRAYS[x];
         wchar_t nm[32];
@@ -207,11 +223,12 @@ static void saveSettings2() {
     }
 }
 
-// الدقيقة بعد «تعديل (دقيقة)» بتاع الصلاة
+// الدقيقة بعد «الترحيل العام» + «تعديل (دقيقة)» بتاع الصلاة نفسها
 static int prayMin(int i) {
     int m = g_times.minuteOfDay(i);
-    if (m < 0 || i == athan::SUNRISE) return m;
-    return ((m + g_pc[i].tune) % 1440 + 1440) % 1440;
+    if (m < 0) return m;
+    if (i == athan::SUNRISE) return ((m + g_globalTune) % 1440 + 1440) % 1440;
+    return ((m + g_globalTune + g_pc[i].tune) % 1440 + 1440) % 1440;
 }
 static std::wstring fmtMin(int m) {
     if (m < 0) return L"--:--";
@@ -279,9 +296,71 @@ static int listSounds(std::wstring* out, int maxn) {
     return n;
 }
 
+// مجلد التنزيلات — الفولدر الافتراضي اللي بيفتح عليه اختيار الأصوات
+static std::wstring downloadsDir() {
+    wchar_t* p = nullptr;
+    std::wstring d;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Downloads, 0, nullptr, &p)) && p) {
+        d = p;
+        CoTaskMemFree(p);
+    }
+    if (d.empty()) {
+        wchar_t up[MAX_PATH] = L"";
+        if (GetEnvironmentVariableW(L"USERPROFILE", up, MAX_PATH)) d = std::wstring(up) + L"\\Downloads";
+    }
+    return d;
+}
+
+// اختيار ملفات صوت من أي مكان ونسخها جوّه مجلد الأصوات
+static int addSoundFiles(HWND owner) {
+    static wchar_t buf[16384];
+    buf[0] = 0;
+    std::wstring init = downloadsDir();
+    OPENFILENAMEW ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFilter = g_ar ? L"ملفات صوت\0*.mp3;*.wav;*.wma;*.m4a\0كل الملفات\0*.*\0\0"
+                           : L"Audio files\0*.mp3;*.wav;*.wma;*.m4a\0All files\0*.*\0\0";
+    ofn.lpstrFile = buf;
+    ofn.nMaxFile = 16384;
+    ofn.lpstrTitle = g_ar ? L"اختار ملفات الأذان اللي عايز تضيفها" : L"Pick adhan files to add";
+    if (!init.empty()) ofn.lpstrInitialDir = init.c_str();
+    ofn.Flags = OFN_EXPLORER | OFN_ALLOWMULTISELECT | OFN_FILEMUSTEXIST |
+                OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+    if (!GetOpenFileNameW(&ofn)) return 0;
+
+    std::wstring dst = soundsDir();
+    int n = 0;
+    std::wstring first = buf;
+    const wchar_t* second = buf + first.size() + 1;
+    if (!*second) {                       // ملف واحد → المسار كامل
+        const wchar_t* nm = wcsrchr(first.c_str(), L'\\');
+        nm = nm ? nm + 1 : first.c_str();
+        if (CopyFileW(first.c_str(), (dst + L"\\" + nm).c_str(), FALSE)) n++;
+    } else {                              // أكتر من ملف → المجلد الأول وبعده الأسماء
+        const wchar_t* p = second;
+        while (*p) {
+            std::wstring src = first + L"\\" + p;
+            if (CopyFileW(src.c_str(), (dst + L"\\" + p).c_str(), FALSE)) n++;
+            p += wcslen(p) + 1;
+        }
+    }
+    return n;
+}
+
 static void stopSound() {
     mciSendStringW(L"close abx", nullptr, 0, nullptr);
     g_playing = false;
+    g_playIdx = -1;
+    g_preview = false;
+    if (g_hSet) InvalidateRect(g_hSet, nullptr, TRUE);
+}
+
+// الملف خلص لوحده؟ (MCI بترجّع stopped بعد النهاية)
+static bool mciStillPlaying() {
+    wchar_t st[32] = L"";
+    if (mciSendStringW(L"status abx mode", st, 32, nullptr) != 0) return false;
+    return wcscmp(st, L"playing") == 0;
 }
 
 static void playFile(const wchar_t* fname, int vol) {
@@ -299,6 +378,15 @@ static void playFile(const wchar_t* fname, int vol) {
 }
 static void playAdhan() {   // للتجربة العامة — بصوت ودرجة الظهر
     playFile(g_pc[athan::DHUHR].sound, g_pc[athan::DHUHR].vol);
+    g_playIdx = -2;
+}
+// زرار ▶/■ توجل: نفس الزرار بيشغّل ويوقّف
+static void togglePlay(int i) {
+    if (g_playing && g_playIdx == i) { stopSound(); return; }
+    playFile(g_pc[i].sound, g_pc[i].vol);
+    g_playIdx = i;
+    g_preview = true;
+    if (g_hSet) InvalidateRect(g_hSet, nullptr, TRUE);
 }
 
 static void recompute() {
@@ -328,11 +416,24 @@ static int nextPrayerIdx(int nowMin) {
     return -1;
 }
 
+// الشاشة اللي ظهرت لوحدها وقت الأذان ترجع تختفي — سواء الأذان خلص أو المستخدم وقّفه
+static void hideIfAutoShown(HWND hwnd) {
+    if (!g_autoShown) return;
+    g_autoShown = false;
+    ShowWindow(hwnd, SW_HIDE);
+}
+
 static void tick(HWND hwnd) {
     time_t now = time(nullptr);
     tm lt;
     localtime_s(&lt, &now);
     if (lt.tm_yday != g_day) { recompute(); g_firedMin = -1; }
+
+    // الصوت خلص لوحده؟ نصحّح الحالة، ولو الشاشة كانت ظهرت للأذان نخفيها
+    if (g_playing && !mciStillPlaying()) {
+        stopSound();
+        hideIfAutoShown(hwnd);
+    }
 
     int nm = nowMinute();
     bool muted = (g_muteUntil > time(nullptr));
@@ -350,7 +451,16 @@ static void tick(HWND hwnd) {
         }
         if (pm == nm && g_firedMin != nm) {
             g_firedMin = nm;
-            if (g_adhanOn && !muted) playFile(g_pc[i].sound, g_pc[i].vol);
+            if (g_adhanOn && !muted) {
+                playFile(g_pc[i].sound, g_pc[i].vol);
+                g_playIdx = i;
+                // تظهر الشاشة وقت الأذان وتفضل لحد ما يخلص وبعدين تتخفي لوحدها
+                if (g_showAtAdhan && !IsWindowVisible(hwnd)) {
+                    g_autoShown = true;
+                    ShowWindow(hwnd, SW_SHOWNORMAL);
+                    SetForegroundWindow(hwnd);
+                }
+            }
         }
     }
     InvalidateRect(hwnd, nullptr, TRUE);
@@ -521,14 +631,18 @@ static void drawButton(const DRAWITEMSTRUCT* di) {
 // ═══ نافذة الإعدادات الكاملة — زي صفحة الراسبيري ═══
 struct SetRow { bool* val; const wchar_t* ar; const wchar_t* en; };
 static SetRow g_rows[] = {
-    {&g_adhanOn,   L"الأذان التلقائي في وقت كل صلاة", L"Automatic adhan at prayer times"},
-    {&g_preNotify, L"تنبيه قبل الأذان بـ10 دقايق",     L"Notify 10 minutes before adhan"},
-    {&g_autoStart, L"تشغيل البرنامج مع بدء ويندوز",    L"Start with Windows"},
+    {&g_adhanOn,     L"الأذان التلقائي في وقت كل صلاة", L"Automatic adhan at prayer times"},
+    {&g_preNotify,   L"تنبيه قبل الأذان بـ10 دقايق",     L"Notify 10 minutes before adhan"},
+    {&g_autoStart,   L"تشغيل البرنامج مع بدء ويندوز (مصغّر)", L"Start with Windows (minimized)"},
+    {&g_showAtAdhan, L"إظهار الشاشة وقت الأذان وإخفاؤها بعده", L"Show window during adhan, hide after"},
 };
-enum { CB_COUNTRY = 340, CB_CITY, CB_METHOD, CB_ASR, BT_FOLDER = 350,
+enum { CB_COUNTRY = 340, CB_CITY, CB_METHOD, CB_ASR, ED_GTUNE,
+       BT_FOLDER = 350, BT_ADDSND, BT_CLOSE,
        CB_SND0 = 360, ED_VOL0 = 370, ED_TUNE0 = 380, BT_PLAY0 = 390 };
 static HBRUSH g_hbDark = nullptr;
-static const int PROW_Y0 = 214, PROW_H = 44, GROW_Y0 = 452, GROW_H = 44;
+static const int PROW_Y0 = 250, PROW_H = 44, GROW_Y0 = 478, GROW_H = 42, GROW_N = 4;
+static const int BTNROW_Y = GROW_Y0 + GROW_N * GROW_H + 8;   // صف زراير مجلد الأصوات
+static const int CLOSE_Y  = BTNROW_Y + 44;                    // زرار الإغلاق
 
 static void drawSwitch(HDC dc, RECT r, bool on) {
     HBRUSH b = CreateSolidBrush(on ? RGB(47, 191, 113) : RGB(57, 70, 92));
@@ -594,6 +708,10 @@ static void fillCombos(HWND h) {
     SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)(g_ar ? L"الحنفي" : L"Hanafi"));
     SendMessageW(cb, CB_SETCURSEL, g_asr == 2 ? 1 : 0, 0);
 
+    wchar_t gb[16];
+    swprintf(gb, 16, L"%d", g_globalTune);
+    SetWindowTextW(GetDlgItem(h, ED_GTUNE), gb);
+
     std::wstring snd[64];
     int ns = listSounds(snd, 64);
     for (int x = 0; x < 5; x++) {
@@ -625,6 +743,12 @@ static void applyFromControls(HWND h) {
         i2++;
     }
     g_asr = SendMessageW(GetDlgItem(h, CB_ASR), CB_GETCURSEL, 0, 0) == 1 ? 2 : 1;
+    {
+        wchar_t gb[16] = L"";
+        GetWindowTextW(GetDlgItem(h, ED_GTUNE), gb, 16);
+        int g = _wtoi(gb);
+        g_globalTune = g < -120 ? -120 : (g > 120 ? 120 : g);
+    }
     for (int x = 0; x < 5; x++) {
         int i = PRAYS[x];
         wchar_t b[160];
@@ -656,6 +780,8 @@ static LRESULT CALLBACK setProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         CreateWindowW(L"COMBOBOX", nullptr, cbs, 24, 76, 200, 360, h, (HMENU)CB_CITY, nullptr, nullptr);
         CreateWindowW(L"COMBOBOX", nullptr, cbs, 152, 132, 292, 380, h, (HMENU)CB_METHOD, nullptr, nullptr);
         CreateWindowW(L"COMBOBOX", nullptr, cbs, 24, 132, 118, 120, h, (HMENU)CB_ASR, nullptr, nullptr);
+        CreateWindowW(L"EDIT", nullptr, WS_CHILD | WS_VISIBLE | ES_CENTER | WS_BORDER,
+                      24, 190, 118, 26, h, (HMENU)ED_GTUNE, nullptr, nullptr);
         for (int x = 0; x < 5; x++) {
             int i = PRAYS[x], y = PROW_Y0 + x * PROW_H;
             CreateWindowW(L"COMBOBOX", nullptr, cbs, 160, y + 6, 158, 300, h, (HMENU)(INT_PTR)(CB_SND0 + i), nullptr, nullptr);
@@ -667,7 +793,11 @@ static LRESULT CALLBACK setProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                           24, y + 6, 30, 26, h, (HMENU)(INT_PTR)(BT_PLAY0 + i), nullptr, nullptr);
         }
         CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-                      24, GROW_Y0 + 3 * GROW_H + 6, 420, 32, h, (HMENU)BT_FOLDER, nullptr, nullptr);
+                      24, BTNROW_Y, 206, 34, h, (HMENU)BT_FOLDER, nullptr, nullptr);
+        CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                      238, BTNROW_Y, 206, 34, h, (HMENU)BT_ADDSND, nullptr, nullptr);
+        CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                      134, CLOSE_Y, 200, 36, h, (HMENU)BT_CLOSE, nullptr, nullptr);
         fillCombos(h);
         return 0;
     }
@@ -685,21 +815,44 @@ static LRESULT CALLBACK setProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         FillRect(di->hDC, &di->rcItem, wb);
         DeleteObject(wb);
         bool down = (di->itemState & ODS_SELECTED) != 0;
-        bool folder = (di->CtlID == BT_FOLDER);
-        HBRUSH b = CreateSolidBrush(down ? RGB(35, 52, 80) : (folder ? RGB(24, 36, 58) : RGB(16, 61, 40)));
-        HPEN pn = CreatePen(PS_SOLID, 1, folder ? RGB(60, 80, 110) : RGB(47, 191, 113));
+        int  id = (int)di->CtlID;
+        bool wide = (id == BT_FOLDER || id == BT_ADDSND || id == BT_CLOSE);
+        bool closeb = (id == BT_CLOSE);
+        // زرار التجربة توجل: ▶ أخضر وهو واقف، ■ أحمر وهو شغّال
+        bool stopMode = (!wide && g_playing && g_playIdx == id - BT_PLAY0);
+        COLORREF fill = down ? RGB(35, 52, 80)
+                      : (closeb ? RGB(30, 44, 68)
+                      : (wide ? RGB(24, 36, 58)
+                      : (stopMode ? RGB(61, 18, 22) : RGB(16, 61, 40))));
+        COLORREF edge = closeb ? RGB(80, 104, 140)
+                      : (wide ? RGB(60, 80, 110)
+                      : (stopMode ? RGB(160, 60, 70) : RGB(47, 191, 113)));
+        COLORREF ink  = closeb ? RGB(200, 217, 240)
+                      : (wide ? RGB(147, 180, 220)
+                      : (stopMode ? RGB(255, 139, 150) : RGB(125, 227, 171)));
+        HBRUSH b = CreateSolidBrush(fill);
+        HPEN pn = CreatePen(PS_SOLID, 1, edge);
         HGDIOBJ ob = SelectObject(di->hDC, b), op = SelectObject(di->hDC, pn);
         RoundRect(di->hDC, di->rcItem.left, di->rcItem.top, di->rcItem.right, di->rcItem.bottom, 10, 10);
         SelectObject(di->hDC, ob); SelectObject(di->hDC, op);
         DeleteObject(b); DeleteObject(pn);
         SetBkMode(di->hDC, TRANSPARENT);
-        SetTextColor(di->hDC, folder ? RGB(147, 180, 220) : RGB(125, 227, 171));
-        SelectObject(di->hDC, g_fSmall);
+        SetTextColor(di->hDC, ink);
+        SelectObject(di->hDC, closeb ? g_fMid : g_fSmall);
+        const wchar_t* cap;
+        if (id == BT_FOLDER)
+            cap = g_ar ? L"\U0001F4C2 فتح مجلد الأصوات"
+                       : L"\U0001F4C2 Open sounds folder";
+        else if (id == BT_ADDSND)
+            cap = g_ar ? L"\u2795 أضف ملفات أذان"
+                       : L"\u2795 Add adhan files";
+        else if (closeb)
+            cap = g_ar ? L"إغلاق" : L"Close";
+        else
+            cap = stopMode ? L"\u25A0" : L"\u25B6";
         RECT r = di->rcItem;
-        DrawTextW(di->hDC, folder ? (g_ar ? L"\U0001F4C2 فتح مجلد الأصوات — حط فيه أي ملفات أذان"
-                                          : L"\U0001F4C2 Open sounds folder — drop adhan files there")
-                                  : L"\u25B6", -1, &r,
-                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | ((g_ar && folder) ? DT_RTLREADING : 0));
+        DrawTextW(di->hDC, cap, -1, &r,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | ((g_ar && wide) ? DT_RTLREADING : 0));
         return TRUE;
     }
     case WM_PAINT: {
@@ -727,7 +880,15 @@ static LRESULT CALLBACK setProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         DrawTextW(dc, g_ar ? L"طريقة الحساب" : L"Calculation method", -1, &r3, (g_ar ? DT_RIGHT | DT_RTLREADING : DT_LEFT));
         RECT r4 = {24, 112, 142, 130};
         DrawTextW(dc, g_ar ? L"مذهب العصر" : L"Asr", -1, &r4, (g_ar ? DT_RIGHT | DT_RTLREADING : DT_LEFT));
+        // ── الترحيل العام لكل المواقيت ──
+        RECT r5 = {24, 168, 142, 188};
+        DrawTextW(dc, g_ar ? L"ترحيل عام (دقيقة)" : L"Global shift (min)", -1, &r5,
+                  (g_ar ? DT_RIGHT | DT_RTLREADING : DT_LEFT));
         SetTextColor(dc, RGB(120, 138, 166));
+        RECT r6 = {152, 166, 444, 214};
+        DrawTextW(dc, g_ar ? L"بيتضاف لكل الصلوات. لو مدينتك بتفرق 5 دقايق عن المدينة المختارة اكتب 5 (أو ناقص 5)"
+                           : L"Added to every prayer. If your town runs 5 min later than the selected city, type 5",
+                  -1, &r6, DT_WORDBREAK | (g_ar ? DT_RIGHT | DT_RTLREADING : DT_LEFT));
         RECT hh1 = {160, PROW_Y0 - 20, 318, PROW_Y0 - 2};
         DrawTextW(dc, g_ar ? L"صوت الأذان" : L"Adhan sound", -1, &hh1, DT_CENTER | (g_ar ? DT_RTLREADING : 0));
         RECT hh2 = {110, PROW_Y0 - 20, 152, PROW_Y0 - 2};
@@ -744,7 +905,7 @@ static LRESULT CALLBACK setProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             RECT sw = {card.right - 54, y + 9, card.right - 12, y + 30};
             drawSwitch(dc, sw, g_pc[i].on);
         }
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < GROW_N; i++) {
             int y = GROW_Y0 + i * GROW_H;
             RECT card = {14, y, rc.right - 14, y + GROW_H - 8};
             roundCard(dc, card, RGB(21, 29, 44), RGB(38, 51, 74));
@@ -778,7 +939,7 @@ static LRESULT CALLBACK setProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             }
             return 0;
         }
-        if (y >= GROW_Y0 && y < GROW_Y0 + 3 * GROW_H) {
+        if (y >= GROW_Y0 && y < GROW_Y0 + GROW_N * GROW_H) {
             int i = (y - GROW_Y0) / GROW_H;
             *g_rows[i].val = !*g_rows[i].val;
             saveSettings();
@@ -799,14 +960,26 @@ static LRESULT CALLBACK setProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         } else if ((id == CB_CITY || id == CB_METHOD || id == CB_ASR ||
                     (id >= CB_SND0 && id < CB_SND0 + athan::COUNT)) && code == CBN_SELCHANGE) {
             applyFromControls(h);
-        } else if ((id >= ED_VOL0 && id < ED_TUNE0 + athan::COUNT) && code == EN_KILLFOCUS) {
+        } else if (((id >= ED_VOL0 && id < ED_TUNE0 + athan::COUNT) || id == ED_GTUNE)
+                   && code == EN_KILLFOCUS) {
             applyFromControls(h);
+            InvalidateRect(h, nullptr, TRUE);
         } else if (id >= BT_PLAY0 && id < BT_PLAY0 + athan::COUNT) {
             applyFromControls(h);
-            int i = id - BT_PLAY0;
-            playFile(g_pc[i].sound, g_pc[i].vol);
+            togglePlay(id - BT_PLAY0);
+            InvalidateRect(h, nullptr, TRUE);
         } else if (id == BT_FOLDER) {
             ShellExecuteW(nullptr, L"open", soundsDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        } else if (id == BT_ADDSND) {
+            int n = addSoundFiles(h);
+            if (n > 0) {
+                fillCombos(h);          // القوايم تتحدّث فورًا بالملفات الجديدة
+                wchar_t msg[128];
+                swprintf(msg, 128, g_ar ? L"اتضاف %d ملف لمجلد الأصوات." : L"%d file(s) added to the sounds folder.", n);
+                MessageBoxW(h, msg, g_ar ? L"تمام" : L"Done", MB_OK | MB_ICONINFORMATION);
+            }
+        } else if (id == BT_CLOSE) {
+            SendMessageW(h, WM_CLOSE, 0, 0);
         }
         return 0;
     }
@@ -814,6 +987,7 @@ static LRESULT CALLBACK setProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         return 1;
     case WM_CLOSE:
         applyFromControls(h);
+        if (g_preview) stopSound();     // تجربة صوت شغّالة؟ تقف مع الإغلاق (الأذان الحقيقي بيكمّل)
         DestroyWindow(h);
         return 0;
     case WM_DESTROY:
@@ -832,14 +1006,19 @@ static void openSettings(HWND parent) {
         wc.hInstance = GetModuleHandleW(nullptr);
         wc.lpszClassName = L"AdhanBoxSet";
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1));
         RegisterClassW(&wc);
         reg = true;
     }
     RECT pr; GetWindowRect(parent, &pr);
+    int hgt = CLOSE_Y + 36 + 12 + GetSystemMetrics(SM_CYCAPTION) + 2 * GetSystemMetrics(SM_CYFIXEDFRAME);
+    int top = 40;
+    int scr = GetSystemMetrics(SM_CYSCREEN);
+    if (top + hgt > scr - 40) top = (scr - hgt) / 2 > 0 ? (scr - hgt) / 2 : 0;
     g_hSet = CreateWindowExW(WS_EX_TOOLWINDOW, L"AdhanBoxSet",
                              g_ar ? L"الإعدادات" : L"Settings",
                              WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-                             pr.left - 20, 40, 476, 660,
+                             pr.left - 20, top, 476, hgt,
                              parent, nullptr, GetModuleHandleW(nullptr), nullptr);
     ShowWindow(g_hSet, SW_SHOWNORMAL);
 }
@@ -857,7 +1036,7 @@ static LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                       66, 18, 30, 26, h, (HMENU)IDB_ABOUT, nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"⚙", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                       100, 18, 30, 26, h, (HMENU)IDB_SETTINGS, nullptr, nullptr);
-        SetTimer(h, IDT_TICK, 10000, nullptr);    // فحص كل 10 ثواني
+        SetTimer(h, IDT_TICK, 2000, nullptr);    // فحص كل ثانيتين (خفيف — ومطلوب لرصد نهاية الأذان)
         return 0;
     }
     case WM_DRAWITEM:
@@ -883,7 +1062,7 @@ static LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         return 1;    // الرسم المزدوج بيغطي كل حاجة — منع الوميض
     case WM_COMMAND:
         if (LOWORD(w) == IDB_TEST) { playAdhan(); InvalidateRect(h, nullptr, TRUE); }
-        if (LOWORD(w) == IDB_STOP) { stopSound(); InvalidateRect(h, nullptr, TRUE); }
+        if (LOWORD(w) == IDB_STOP) { stopSound(); hideIfAutoShown(h); InvalidateRect(h, nullptr, TRUE); }
         if (LOWORD(w) == IDB_LANG) {
             g_ar = !g_ar; saveLang();
             SetWindowTextW(GetDlgItem(h, IDB_TEST), S_TEST.get());
@@ -893,12 +1072,12 @@ static LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             InvalidateRect(h, nullptr, TRUE);
         }
         if (LOWORD(w) == IDB_ABOUT || LOWORD(w) == IDM_ABOUT) aboutBox(h);
-        if (LOWORD(w) == IDM_MUTE1H) { g_muteUntil = time(nullptr) + 3600; stopSound(); InvalidateRect(h, nullptr, TRUE); }
-        if (LOWORD(w) == IDM_MUTEDAY) { g_muteUntil = time(nullptr) + 24 * 3600; stopSound(); InvalidateRect(h, nullptr, TRUE); }
+        if (LOWORD(w) == IDM_MUTE1H) { g_muteUntil = time(nullptr) + 3600; stopSound(); hideIfAutoShown(h); InvalidateRect(h, nullptr, TRUE); }
+        if (LOWORD(w) == IDM_MUTEDAY) { g_muteUntil = time(nullptr) + 24 * 3600; stopSound(); hideIfAutoShown(h); InvalidateRect(h, nullptr, TRUE); }
         if (LOWORD(w) == IDM_UNMUTE) { g_muteUntil = 0; InvalidateRect(h, nullptr, TRUE); }
         if (LOWORD(w) == IDB_SETTINGS) openSettings(h);
         if (LOWORD(w) == IDM_OPEN) ShowWindow(h, SW_SHOWNORMAL), SetForegroundWindow(h);
-        if (LOWORD(w) == IDM_STOPSND) stopSound();
+        if (LOWORD(w) == IDM_STOPSND) { stopSound(); hideIfAutoShown(h); }
         if (LOWORD(w) == IDM_EXIT) DestroyWindow(h);
         return 0;
     case WM_TIMER:
@@ -959,6 +1138,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR, int) {
     wc.hInstance = hi;
     wc.lpszClassName = L"AdhanBoxWnd";
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hIcon = LoadIconW(hi, MAKEINTRESOURCEW(1));
     RegisterClassW(&wc);
 
     HWND h = CreateWindowExW(WS_EX_APPWINDOW, wc.lpszClassName, APP_NAME,
@@ -972,11 +1152,20 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR, int) {
     g_nid.uID = 1;
     g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_nid.uCallbackMessage = WM_TRAY;
-    g_nid.hIcon = LoadIcon(nullptr, IDI_APPLICATION);   // أيقونة مؤقتة — البراند الجولة الجاية
+    g_nid.hIcon = (HICON)LoadImageW(hi, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                    GetSystemMetrics(SM_CXSMICON),
+                                    GetSystemMetrics(SM_CYSMICON), 0);
+    if (!g_nid.hIcon) g_nid.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
     wcscpy_s(g_nid.szTip, S_TIP.get());
     Shell_NotifyIconW(NIM_ADD, &g_nid);
 
-    ShowWindow(h, SW_SHOWNORMAL);
+    // مع بدء ويندوز بيتفتح مصغّر في التراي (/tray) — والباقي عادي
+    bool startHidden = false;
+    {
+        const wchar_t* cl = GetCommandLineW();
+        if (cl && (wcsstr(cl, L"/tray") || wcsstr(cl, L"-tray"))) startHidden = true;
+    }
+    ShowWindow(h, startHidden ? SW_HIDE : SW_SHOWNORMAL);
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0)) {
         TranslateMessage(&msg);
