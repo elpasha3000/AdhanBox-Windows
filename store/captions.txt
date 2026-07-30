@@ -1,6 +1,6 @@
 ar|main|الأذان في وقته على ويندوز|حساب فلكي محلي بدون إنترنت · 264 مدينة في 67 دولة · الأذان بيشتغل لوحده في وقته
 ar|set|كل حاجة تحت إيدك|لكل أذان: صوت ودرجة ومدة تشغيل · ترحيل عام للمواقيت · يشتغل مع ويندوز مصغّر
-ar|about|مجاني بالكامل — نسألكم الدعاء|كود مفتوح برخصة MIT · بدون إعلانات · بدون تتبّع · بدون حساب
+ar|about|مجاني بالكامل|كود مفتوح برخصة MIT · بدون إعلانات · بدون تتبّع · بدون حساب
 en|main|Adhan on time, on Windows|Offline astronomical calculation · 264 cities in 67 countries · Adhan plays automatically
 en|set|Everything under your control|Per-prayer sound, volume and duration · Global time shift · Starts with Windows
-en|about|Completely free — please keep us in your du'a|Open source (MIT) · No ads · No tracking · No account
+en|about|Completely free|Open source (MIT) · No ads · No tracking · No account
