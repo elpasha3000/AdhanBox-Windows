@@ -15,3 +15,5 @@ msix/pkg/AdhanBoxStartup.exe
 msix/*.msix
 msix/test.*
 AdhanBoxStartup.exe
+sourceforge/stage/
+sourceforge/*.zip

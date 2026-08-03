@@ -1,7 +1,7 @@
 # 🖥️ AdhanBox for Windows — مانفست المشروع
 
 > بدأ 2026-07-29 بقرار أحمد. تطبيق أذان **مجاني** لويندوز → متجر مايكروسوفت + GitHub (كود مفتوح MIT).
-> **ابدأ من هنا دايمًا.** الشقيق: AdhanBox للراسبيري (`D:\WORK\Athan-Docker-Project`).
+> **ابدأ من هنا دايمًا.** الشقيق: AdhanBox للراسبيري (`D:\WORK\AdhanBox\Athan-Docker-Project`).
 
 ## 📌 قرارات أحمد النصية (2026-07-29)
 - بسيط **زي صفحة الراسبيري**: مواقيت اليوم + عدّاد الصلاة الجاية + إعدادات لكل صلاة + تجربة صوت.
@@ -32,7 +32,7 @@
 
 **⚠️ ملحوظة اختبار:** تفعيل الحزمة من الحاوية بوضع المطوّر (loose registration) فشل صامتًا على الجهاز ده (AppModel 0x490) — **مش عيب في الحزمة**: نفس نمط Screen2ipcam 1.1.5 اللي عدّى تصديق المتجر، والـexe والمشغّل متجرّبين مباشرة. المتجر بيثبّت موقّع في WindowsApps فالمسار مختلف. لو عايز تعيد التجربة: وضع المطوّر مفعّل عند أحمد.
 
-**الرفع لـPartner Center:** نصوص الصفحة في `D:\WORK\AdhanBox-Store-Listing\` (AR/EN متحقّق من الحدود) + privacy URL: `https://github.com/elpasha3000/AdhanBox-Windows/blob/main/PRIVACY.md` + الصور في `store\`. **الريبو عام ومدفوع:** github.com/elpasha3000/AdhanBox-Windows (آخر دفعة `82c752b`).
+**الرفع لـPartner Center:** نصوص الصفحة في `D:\WORK\AdhanBox\AdhanBox-Store-Listing\` (AR/EN متحقّق من الحدود) + privacy URL: `https://github.com/elpasha3000/AdhanBox-Windows/blob/main/PRIVACY.md` + الصور في `store\`. **الريبو عام ومدفوع:** github.com/elpasha3000/AdhanBox-Windows (آخر دفعة `82c752b`).
 
 ## 🏁 حالة 2026-07-30 ليلًا — v0.4 (آخر كلمة — ابدأ من هنا)
 
