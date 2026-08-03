@@ -39,7 +39,7 @@ Prayer times are **calculated on your own computer** from your city's coordinate
 
 ### Install
 
-- **Microsoft Store** — coming soon (recommended: signed by Microsoft, updates automatically)
+- **[Microsoft Store](https://apps.microsoft.com/detail/9php7qsvq829)** — recommended: signed by Microsoft, updates automatically
 - **Build from source** — see below
 
 ### Build from source
@@ -101,7 +101,7 @@ The bundled adhan recording is included for convenience; you can replace it with
 
 ### التثبيت
 
-- **متجر مايكروسوفت** — قريبًا (الأفضل: موقّع من مايكروسوفت وبيتحدّث لوحده)
+- **[متجر مايكروسوفت](https://apps.microsoft.com/detail/9php7qsvq829)** — الأفضل: موقّع من مايكروسوفت وبيتحدّث لوحده
 - **البناء من الكود** — الأوامر فوق في القسم الإنجليزي
 
 ### الرخصة

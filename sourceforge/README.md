@@ -13,7 +13,7 @@ Prayer times are **calculated on your own computer** from your city's coordinate
 **`AdhanBox_0.4_Windows_x64.zip`** — portable, no installation. Unzip and run `AdhanBox.exe`.
 
 - Windows 10 / 11 (64-bit)
-- Microsoft Store version: coming soon *(signed by Microsoft, updates automatically)*
+- **[Microsoft Store version](https://apps.microsoft.com/detail/9php7qsvq829)** *(signed by Microsoft, updates automatically)*
 - Source code: **[github.com/elpasha3000/AdhanBox-Windows](https://github.com/elpasha3000/AdhanBox-Windows)**
 
 ---
