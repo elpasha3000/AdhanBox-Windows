@@ -24,7 +24,7 @@
 
 ## 🏁 حالة 2026-08-03 ليلًا — v0.4.1 + الحزمة جاهزة (آخر كلمة)
 
-**الحزمة:** `msix\AdhanBox_0.4.0.0_x64.msix` (732KB · **غير موقّعة عن قصد** — مايكروسوفت بتوقّع) · هوية المتجر: `Screen2ipcam.AdhanBox` / `CN=759F2B5B-...` / PFN `Screen2ipcam.AdhanBox_0qnf38brt1ger` / Store ID `9PHP7QSVQ829`. البناء: `msixuild-msix.bat` (SDK في `D:\Windows Kitsin.0.22621.0d` — **مش C:**).
+**الحزمة:** `msix\AdhanBox_0.4.0.0_x64.msix` (732KB · **غير موقّعة عن قصد** — مايكروسوفت بتوقّع) · هوية المتجر: `Screen2ipcam.AdhanBox` / `CN=759F2B5B-...` / PFN `Screen2ipcam.AdhanBox_0qnf38brt1ger` / Store ID `9PHP7QSVQ829`. البناء: `msix\build-msix.bat` (SDK في `D:\Windows Kits\10\bin\10.0.22621.0\x64` — **مش C:**).
 
 **اتصلّح وجُرّب لايف قدام أحمد:** النافذة المصغّرة ماكانتش بتطلع وقت الأذان (`IsWindowVisible` بيعتبر المصغّرة «ظاهرة») → `SW_RESTORE` + topmost لحظي + `FlashWindow`. التجربة: فتحت 22:33:00 في الواجهة، أذّنت 20ث، اختفت 22:33:20 لوحدها.
 
