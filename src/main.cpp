@@ -428,16 +428,55 @@ static std::wstring exeDir() {
     return s.substr(0, s.find_last_of(L'\\'));
 }
 
+/* أذان الحرم المكي مدمج جوّه الـexe كمورد — بيتكتب في مجلد الأصوات أول تشغيل. */
+static void extractAdhan(const std::wstring& path) {
+    HRSRC r = FindResourceW(nullptr, MAKEINTRESOURCEW(101), RT_RCDATA);
+    if (!r) return;
+    HGLOBAL hg = LoadResource(nullptr, r);
+    if (!hg) return;
+    void* p = LockResource(hg);
+    DWORD n = SizeofResource(nullptr, r);
+    if (!p || !n) return;
+    HANDLE fh = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    if (fh == INVALID_HANDLE_VALUE) return;
+    DWORD w = 0;
+    WriteFile(fh, p, n, &w, nullptr);
+    CloseHandle(fh);
+}
+/* مجلد الأصوات في %LOCALAPPDATA% مش جنب الـexe: مجلد تثبيت MSIX للقراءة فقط،
+   فالكتابة جنب الـexe بتفشل والأذان مايشتغلش. (نفس درس Screen2ipcam.) */
 static std::wstring soundsDir() {
-    std::wstring d = exeDir() + L"\\sounds";
+    wchar_t la[MAX_PATH] = L"";
+    std::wstring d;
+    if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0, la)) && la[0]) {
+        d = la;
+        d += L"\\MagicWeb"; CreateDirectoryW(d.c_str(), nullptr);
+        d += L"\\AdhanBox"; CreateDirectoryW(d.c_str(), nullptr);
+        d += L"\\sounds";
+    } else {
+        d = exeDir() + L"\\sounds";
+    }
     CreateDirectoryW(d.c_str(), nullptr);
-    // أول تشغيل: انسخ أذان الحرم المضمّن جوّه المجلد
     WIN32_FIND_DATAW fd;
     HANDLE f = FindFirstFileW((d + L"\\*.mp3").c_str(), &fd);
-    if (f == INVALID_HANDLE_VALUE)
-        CopyFileW((exeDir() + L"\\makkah-adhan.mp3").c_str(),
-                  (d + L"\\makkah-adhan.mp3").c_str(), FALSE);
-    else FindClose(f);
+    if (f == INVALID_HANDLE_VALUE) {
+        // ترقية من نسخة قديمة: انقل أي أصوات كان المستخدم ضايفها جنب الـexe
+        std::wstring od = exeDir() + L"\\sounds";
+        WIN32_FIND_DATAW o;
+        HANDLE of = FindFirstFileW((od + L"\\*.*").c_str(), &o);
+        if (of != INVALID_HANDLE_VALUE) {
+            do {
+                if (o.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+                CopyFileW((od + L"\\" + o.cFileName).c_str(),
+                          (d + L"\\" + o.cFileName).c_str(), TRUE);
+            } while (FindNextFileW(of, &o));
+            FindClose(of);
+        }
+        // لسه فاضي؟ استخرج الأذان المدمج
+        HANDLE f2 = FindFirstFileW((d + L"\\*.mp3").c_str(), &fd);
+        if (f2 == INVALID_HANDLE_VALUE) extractAdhan(d + L"\\makkah-adhan.mp3");
+        else FindClose(f2);
+    } else FindClose(f);
     return d;
 }
 static int listSounds(std::wstring* out, int maxn) {
@@ -616,10 +655,18 @@ static void tick(HWND hwnd) {
                 playFile(g_pc[i].sound, g_pc[i].vol, g_pc[i].dur);
                 g_playIdx = i;
                 // تظهر الشاشة وقت الأذان وتفضل لحد ما يخلص وبعدين تتخفي لوحدها
-                if (g_showAtAdhan && !IsWindowVisible(hwnd)) {
-                    g_autoShown = true;
-                    ShowWindow(hwnd, SW_SHOWNORMAL);
+                if (g_showAtAdhan) {
+                    // مخفية في التراي **أو مصغّرة** = إحنا اللي طلّعناها، فنخفيها بعد ما يخلص
+                    if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) g_autoShown = true;
+                    ShowWindow(hwnd, IsIconic(hwnd) ? SW_RESTORE : SW_SHOWNORMAL);
+                    // ويندوز بيمنع برنامج في الخلفية إنه ياخد الواجهة بـSetForegroundWindow لوحدها،
+                    // فبنرفعها فوق الكل بـtopmost لحظيًا وبعدين نرجّعها عادية
+                    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                                 SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                    SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                                 SWP_NOMOVE | SWP_NOSIZE);
                     SetForegroundWindow(hwnd);
+                    FlashWindow(hwnd, TRUE);   // احتياطي لو ويندوز رفض التقديم
                 }
             }
         }

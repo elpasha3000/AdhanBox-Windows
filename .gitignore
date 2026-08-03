@@ -9,3 +9,9 @@ sounds/
 
 # لقطات النوافذ الخام (بتتولد وقت الحاجة)
 p_*.png
+
+msix/pkg/AdhanBox.exe
+msix/pkg/AdhanBoxStartup.exe
+msix/*.msix
+msix/test.*
+AdhanBoxStartup.exe
