@@ -22,6 +22,18 @@
 - التتبع: لينكات `?src=adhanbox-win` (صفر مخاطرة) + لاحقًا نبضة إصدار اختيارية بسياسة خصوصية.
 - الحفظ: `%ProgramData%\MagicWeb\AdhanBox\` أو `%LocalAppData%` (MSIX بيوجّه لوحده) — **مش Program Files** (درس باج #4 بتاع Screen2ipcam).
 
+## 🏁 حالة 2026-08-03 ليلًا — v0.4.1 + الحزمة جاهزة (آخر كلمة)
+
+**الحزمة:** `msix\AdhanBox_0.4.0.0_x64.msix` (732KB · **غير موقّعة عن قصد** — مايكروسوفت بتوقّع) · هوية المتجر: `Screen2ipcam.AdhanBox` / `CN=759F2B5B-...` / PFN `Screen2ipcam.AdhanBox_0qnf38brt1ger` / Store ID `9PHP7QSVQ829`. البناء: `msixuild-msix.bat` (SDK في `D:\Windows Kitsin.0.22621.0d` — **مش C:**).
+
+**اتصلّح وجُرّب لايف قدام أحمد:** النافذة المصغّرة ماكانتش بتطلع وقت الأذان (`IsWindowVisible` بيعتبر المصغّرة «ظاهرة») → `SW_RESTORE` + topmost لحظي + `FlashWindow`. التجربة: فتحت 22:33:00 في الواجهة، أذّنت 20ث، اختفت 22:33:20 لوحدها.
+
+**تغييرات MSIX الجوهرية:** الأذان **مدمج** جوّه الـexe (RCDATA 101، الـexe بقى 804KB) وبيتستخرج لـ`%LOCALAPPDATA%\MagicWeb\AdhanBox\sounds` (مجلد تثبيت MSIX **للقراءة فقط** — كان هيكسر الصوت تمامًا) + نقل تلقائي لأصوات المستخدم القديمة + `AdhanBoxStartup.exe` (نمط s2c_start) للـStartupTask بيشغّل `/tray`.
+
+**⚠️ ملحوظة اختبار:** تفعيل الحزمة من الحاوية بوضع المطوّر (loose registration) فشل صامتًا على الجهاز ده (AppModel 0x490) — **مش عيب في الحزمة**: نفس نمط Screen2ipcam 1.1.5 اللي عدّى تصديق المتجر، والـexe والمشغّل متجرّبين مباشرة. المتجر بيثبّت موقّع في WindowsApps فالمسار مختلف. لو عايز تعيد التجربة: وضع المطوّر مفعّل عند أحمد.
+
+**الرفع لـPartner Center:** نصوص الصفحة في `D:\WORK\AdhanBox-Store-Listing\` (AR/EN متحقّق من الحدود) + privacy URL: `https://github.com/elpasha3000/AdhanBox-Windows/blob/main/PRIVACY.md` + الصور في `store\`. **الريبو عام ومدفوع:** github.com/elpasha3000/AdhanBox-Windows (آخر دفعة `82c752b`).
+
 ## 🏁 حالة 2026-07-30 ليلًا — v0.4 (آخر كلمة — ابدأ من هنا)
 
 **commit `4217e11`** (محلي، لسه ما اتدفعش). اللي اتزاد فوق v0.3 بطلب أحمد:
