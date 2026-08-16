@@ -1,0 +1,19 @@
+# Build output
+*.obj
+*.res
+*.exe
+*.pdb
+*.ilk
+# User sounds (the bundled adhan lives in assets/)
+sounds/
+
+# Raw window captures
+p_*.png
+
+msix/pkg/AdhanBox.exe
+msix/pkg/AdhanBoxStartup.exe
+msix/*.msix
+msix/test.*
+AdhanBoxStartup.exe
+sourceforge/stage/
+sourceforge/*.zip

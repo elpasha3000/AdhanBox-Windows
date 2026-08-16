@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  IgnorableNamespaces="uap rescap desktop">
+
+  <Identity Name="Screen2ipcam.AdhanBox"
+            Publisher="CN=759F2B5B-8AD0-4E1D-AD9E-548129A8307A"
+            Version="0.4.0.0"
+            ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>AdhanBox</DisplayName>
+    <PublisherDisplayName>Screen2ipcam</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+    <Resource Language="ar" />
+  </Resources>
+
+  <Applications>
+    <Application Id="AdhanBox" Executable="AdhanBox.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="AdhanBox"
+        Description="Plays the adhan at every prayer time. Offline, free, Arabic and English."
+        BackgroundColor="#0B111C"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png"
+                         Square310x310Logo="Assets\Square310x310Logo.png"
+                         Square71x71Logo="Assets\Square71x71Logo.png" />
+        <uap:SplashScreen Image="Assets\SplashScreen.png" />
+      </uap:VisualElements>
+      <Extensions>
+        <!-- التشغيل مع بدء ويندوز — الطريقة الرسمية الوحيدة في MSIX (مفتاح Run بيتعزل ومايشتغلش).
+             StartupTask بتشغّل AdhanBoxStartup.exe وهو بيشغّل البرنامج مصغّر في شريط المهام. -->
+        <desktop:Extension Category="windows.startupTask" Executable="AdhanBoxStartup.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="AdhanBoxStartup" Enabled="true" DisplayName="AdhanBox" />
+        </desktop:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
